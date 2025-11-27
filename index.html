@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dashboard de Análisis de Demanda y Precios de Viajes</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+    <style>
+        /* Estilos CSS (Actualizado para 6 gráficos) */
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            margin: 0;
+            padding: 30px;
+            background-color: #f4f4f4; 
+            color: #333;
+        }
+        .header-container {
+            background: linear-gradient(87deg, #1537f6 0%, #0823f1 100%);
+            padding: 40px 20px;
+            margin-bottom: 30px;
+            border-radius: 12px;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+            text-align: center;
+        }
+        .header-container h1 {
+            color: #ffffff;
+            font-size: 2.5em;
+            margin: 0;
+            font-weight: 300;
+        }
+        .header-container p {
+            color: rgba(255, 255, 255, 0.8);
+            margin-top: 5px;
+            font-size: 1.1em;
+        }
+        /* Contenedor actualizado para una cuadrícula de 3x2 */
+        .container {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(350px, 1fr)); 
+            gap: 25px;
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+        .chart-box {
+            background-color: #ffffff;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 0 20px rgba(0, 0, 0, 0.1);
+            transition: transform 0.3s ease-in-out;
+        }
+        .chart-box:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.15);
+        }
+        .chart-box h2 {
+            text-align: center;
+            color: #333;
+            margin-top: 0;
+            border-bottom: 2px solid #0a2df3;
+            padding-bottom: 10px;
+            margin-bottom: 15px;
+            font-weight: 500;
+            font-size: 1.2em; 
+        }
+    </style>
+</head>
+<body>
+
+    <div class="header-container">
+        <h1> Dashboard de Demanda y Precios de Viajes</h1>
+        <p>Análisis de horas pico, tarifas dinámicas, tipo de vehículo y clima.</p>
+    </div>
+
+    <div class="container">
+        <div class="chart-box">
+            <h2>Conteo de Viajes por Hora (Horas Pico)</h2>
+            <canvas id="conteoPorHora"></canvas>
+        </div>
+        <div class="chart-box">
+            <h2>Precio Predicho vs. Distancia (Relación)</h2>
+            <canvas id="precioVsDistancia"></canvas>
+        </div>
+        <div class="chart-box">
+            <h2>Precio Promedio por Hora del Día (Tendencia)</h2>
+            <canvas id="precioPorHora"></canvas>
+        </div>
+        
+        <div class="chart-box">
+            <h2>Proporción de Viajes con Tarifa Dinámica (`Surge`)</h2>
+            <canvas id="proporcionSurge"></canvas>
+        </div>
+        <div class="chart-box">
+            <h2>Conteo de Viajes por Plataforma (`cab_type`)</h2>
+            <canvas id="conteoPorPlataforma"></canvas>
+        </div>
+        <div class="chart-box">
+            <h2>Precio Promedio por Condición Climática</h2>
+            <canvas id="precioPorClima"></canvas>
+        </div>
+    </div>
+
+    <script>
+        // Definición de colores
+        const CHART_COLORS = [
+            '#5e72e4', '#f4645f', '#ffd600', '#2dce89', '#11cdef', '#f5365c', 
+            '#888888', '#00bcd4', '#ff9800', '#673ab7'
+        ];
+
+        // **************************************************
+        // FUNCIÓN PRINCIPAL - UTILIZA FETCH
+        // **************************************************
+        async function loadDataAndDrawCharts() {
+            try {
+                const response = await fetch('rides_predictions.json'); 
+                
+                if (!response.ok) {
+                    throw new Error(`Error HTTP ${response.status}: El archivo 'rides_prediction.json' no se encontró. ¿Estás ejecutando el servidor?`);
+                }
+                
+                const data = await response.json();
+
+                // 2. Procesar datos - ¡Actualización para los campos cab_type y short_summary!
+                const { 
+                    countByHour, 
+                    scatterData, 
+                    avgPriceByHour,
+                    surgeProportions,
+                    countByCabType, // NUEVO
+                    avgPriceBySummary // NUEVO
+                } = processData(data);
+
+                // 3. Dibujar Gráficos 
+                drawCountByHour(countByHour);
+                drawScatterPriceVsDistance(scatterData);
+                drawAvgPriceByHour(avgPriceByHour);
+                drawSurgeProportions(surgeProportions);
+                drawCountByCabType(countByCabType); // NUEVO
+                drawAvgPriceBySummary(avgPriceBySummary); // NUEVO
+
+            } catch (error) {
+                console.error("Hubo un error al procesar o dibujar los gráficos:", error);
+                document.querySelector('.header-container h1').textContent = ` Error de Carga: ${error.message}`;
+                document.querySelector('.header-container p').textContent = 'Por favor, verifica la consola para detalles. Asegúrate de que el servidor local esté corriendo.';
+            }
+        }
+
+        // **************************************************
+        // FUNCIONES DE PROCESAMIENTO - AJUSTADA AL ESQUEMA DE DATOS
+        // **************************************************
+        
+        function processData(data) {
+            const countByHourMap = {}; 
+            const priceByHourMap = {}; 
+            const countByCabTypeMap = {}; // NUEVO: Conteo por cab_type
+            const priceBySummaryMap = {}; // NUEVO: Precio por short_summary
+            let surgeCount = 0; 
+            const totalCount = data.length;
+
+            data.forEach(item => {
+                const price = item.predicted_price;
+                const hour = item.hour;
+                const surge = item.surge_multiplier;
+                const cabType = item.cab_type; // Nuevo campo
+                const summary = item.short_summary; // Nuevo campo
+
+                // Conteo de Viajes por Hora
+                if (!countByHourMap[hour]) { countByHourMap[hour] = 0; }
+                countByHourMap[hour]++;
+
+                // Precio Promedio por Hora
+                if (!priceByHourMap[hour]) { priceByHourMap[hour] = { total: 0, count: 0 }; }
+                priceByHourMap[hour].total += price;
+                priceByHourMap[hour].count++;
+                
+                // Conteo de Sobrecargo
+                if (surge > 1.0) {
+                    surgeCount++;
+                }
+
+                // Conteo por Cab Type
+                if (cabType) {
+                    if (!countByCabTypeMap[cabType]) { countByCabTypeMap[cabType] = 0; }
+                    countByCabTypeMap[cabType]++;
+                }
+
+                // Precio Promedio por Clima (Summary)
+                if (summary) {
+                    if (!priceBySummaryMap[summary]) { priceBySummaryMap[summary] = { total: 0, count: 0 }; }
+                    priceBySummaryMap[summary].total += price;
+                    priceBySummaryMap[summary].count++;
+                }
+            });
+
+            // Resultados de Horas (Asegurando 0-23)
+            const hours = Array.from({ length: 24 }, (_, i) => i);
+            
+            return { 
+                countByHour: { labels: hours, data: hours.map(h => countByHourMap[h] || 0) },
+                scatterData: data.map(item => ({ x: item.distance, y: item.predicted_price, name: item.name })),
+                avgPriceByHour: { labels: hours, data: hours.map(h => priceByHourMap[h] ? (priceByHourMap[h].total / priceByHourMap[h].count).toFixed(2) : null) },
+                surgeProportions: { labels: ['Con Tarifa Dinámica (>1.0)', 'Sin Tarifa Dinámica (1.0)'], data: [surgeCount, totalCount - surgeCount] },
+                countByCabType: { labels: Object.keys(countByCabTypeMap), data: Object.values(countByCabTypeMap) }, // NUEVO
+                avgPriceBySummary: { labels: Object.keys(priceBySummaryMap), data: Object.keys(priceBySummaryMap).map(summary => (priceBySummaryMap[summary].total / priceBySummaryMap[summary].count).toFixed(2)) } // NUEVO
+            };
+        }
+
+        // **************************************************
+        // FUNCIONES DE DIBUJO - NUEVAS
+        // **************************************************
+
+        /** Gráfico 5: Conteo de Viajes por Cab Type (Barras Horizontales) */
+        function drawCountByCabType({ labels, data }) {
+            new Chart(document.getElementById('conteoPorPlataforma'), {
+                type: 'bar',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: 'Número de Viajes',
+                        data: data,
+                        backgroundColor: CHART_COLORS[4], // Cyan
+                        hoverBackgroundColor: CHART_COLORS[0]
+                    }]
+                },
+                options: { 
+                    indexAxis: 'y', // Barras horizontales
+                    responsive: true, 
+                    scales: { 
+                        x: { beginAtZero: true, title: { display: true, text: 'Conteo de Viajes' } },
+                        y: { title: { display: true, text: 'Plataforma' } }
+                    },
+                    plugins: { legend: { display: false } }
+                }
+            });
+        }
+
+        /** Gráfico 6: Precio Promedio por Clima (Radar) */
+        function drawAvgPriceBySummary({ labels, data }) {
+            new Chart(document.getElementById('precioPorClima'), {
+                type: 'radar',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: 'Precio Promedio ($)',
+                        data: data,
+                        backgroundColor: 'rgba(255, 99, 132, 0.2)', 
+                        borderColor: CHART_COLORS[1], // Red
+                        pointBackgroundColor: CHART_COLORS[1],
+                        pointBorderColor: '#fff',
+                        pointHoverBackgroundColor: '#fff',
+                        pointHoverBorderColor: CHART_COLORS[1]
+                    }]
+                },
+                options: { 
+                    responsive: true, 
+                    scales: { 
+                        r: {
+                            angleLines: { display: false },
+                            suggestedMin: 0,
+                            pointLabels: { display: true, font: { size: 10 } }
+                        }
+                    },
+                    plugins: { legend: { display: true, position: 'top' } }
+                }
+            });
+        }
+        
+        // **************************************************
+        // FUNCIONES DE DIBUJO ORIGINALES (Mantenidas)
+        // **************************************************
+        
+        /** Gráfico 1: Conteo de Viajes por Hora (Horas Pico - Barras) */
+        function drawCountByHour({ labels, data }) {
+            new Chart(document.getElementById('conteoPorHora'), {
+                type: 'bar',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: 'Número de Viajes',
+                        data: data,
+                        backgroundColor: CHART_COLORS[3],
+                        hoverBackgroundColor: CHART_COLORS[0]
+                    }]
+                },
+                options: { indexAxis: 'x', responsive: true, scales: { x: { title: { display: true, text: 'Hora del Día' } }, y: { beginAtZero: true, title: { display: true, text: 'Conteo Total' } } }, plugins: { legend: { display: false } } }
+            });
+        }
+        
+        /** Gráfico 2: Precio Predicho vs. Distancia (Scatter) */
+        function drawScatterPriceVsDistance(data) {
+            new Chart(document.getElementById('precioVsDistancia'), {
+                type: 'scatter',
+                data: { datasets: [{ label: 'Viajes', data: data, backgroundColor: CHART_COLORS[0], pointRadius: 6, pointHoverRadius: 8 }] },
+                options: { responsive: true, scales: { x: { type: 'linear', position: 'bottom', title: { display: true, text: 'Distancia (Millas)' } }, y: { title: { display: true, text: 'Precio Predicho ($)' } } }, plugins: { tooltip: { callbacks: { label: function(context) { const point = context.raw; return `Precio: $${point.y.toFixed(2)}, Distancia: ${point.x.toFixed(2)} mi`; } } } } }
+            });
+        }
+
+        /** Gráfico 3: Proporción de Sobrecargo (Dona) */
+        function drawSurgeProportions({ labels, data }) {
+            new Chart(document.getElementById('proporcionSurge'), {
+                type: 'doughnut',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: 'Conteo de Viajes',
+                        data: data,
+                        backgroundColor: [CHART_COLORS[1], CHART_COLORS[4]],
+                        hoverOffset: 10
+                    }]
+                },
+                options: { responsive: true, plugins: { legend: { position: 'right' }, title: { display: true, text: 'Distribución de tarifas' } } }
+            });
+        }
+        
+        /** Gráfico 4: Precio Promedio por Hora (Líneas) */
+        function drawAvgPriceByHour({ labels, data }) {
+            new Chart(document.getElementById('precioPorHora'), {
+                type: 'line',
+                data: { 
+                    labels: labels,
+                    datasets: [{ 
+                        label: 'Precio Promedio ($)', 
+                        data: data, 
+                        borderColor: CHART_COLORS[1], 
+                        backgroundColor: 'rgba(244, 100, 95, 0.2)',
+                        fill: true, 
+                        tension: 0.4,
+                        borderWidth: 3
+                    }] 
+                }, 
+                options: { responsive: true, scales: { x: { title: { display: true, text: 'Hora del Día (0-23)' } }, y: { title: { display: true, text: 'Precio Promedio ($)' } } } }
+            });
+        }
+
+        // Llama a la función principal al cargar la página
+        loadDataAndDrawCharts();
+    </script>
+</body>
+</html>
